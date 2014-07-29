@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+debug=0
+
+shopt -s extglob
+
+error=0
+
+if [[ -z $1 ]]; then
+    echo "[ERROR] you must provide a minimum server version to search (ex: 5.1.37)" >&2
+    error=1
+fi
+if [[ -z $2 ]]; then
+    echo "[ERROR] you must provide a search term" >&2
+    error=1
+fi
+
+((error)) && exit $error
+
+IFS='.' base_version=($1);
+search=$2;
+if ((debug)); then
+    echo "version: ${base_version[@]}"
+    echo "search: $search"
+    exit
+fi
+lines=();
+while IFS='' read -r line; 
+    do lines+=("$(sed 's/<[^<]*>//g' <<<"$line")")
+done < <(
+    matches=()
+    for f in *
+        do re='news-([0-9])-([0-9])-([0-9]{1,2}).*'
+        [[ $f =~ $re ]] && ((BASH_REMATCH[1]==base_version[0] && BASH_REMATCH[2]==base_version[1] && BASH_REMATCH[3]>base_version[2])) && matches+=("${BASH_REMATCH[0]}")
+    done
+    grep  -ni "$search" "${matches[@]}"
+) 
+printlines() {
+for ((line=1; line<=${#lines[@]}; line++)); do 
+    # printf "%s\n" "${v//<+([^>])>/}"
+    # sed 's/<[^<]*>//g' <<<"$v"
+    printf "%2d) %s\n" "$((line))" "${lines[line-1]}"
+done
+}
+printlines
+while read -r -p '#? '; do 
+    case $REPLY in
+        q) echo "Bye!"; exit ;;
+        p) printlines ;;
+        '') ;;
+        +([0-9])) 
+            printf "%q" "$REPLY"
+            if ((REPLY < 1 || REPLY > ${#lines[@]})); then printf "[ERROR] match index out of bounds, must be > 0 and <= %i\n" "${#lines[@]}" >&2; continue; fi
+            match="${lines[REPLY-1]}"
+            re='(news-?-?-.*html):([0-9]+):'
+            [[ $match =~ $re ]] && less -w +"${BASH_REMATCH[2]}"g "${BASH_REMATCH[1]}"
+            printlines
+            ;;
+        *) echo "[ERROR] provide 'p', 'q', or an integer." >&2 ;;
+    esac
+done

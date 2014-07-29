@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+vers=(5.0 5.1 5.5 5.6)
+for ver in "${vers[@]}"; do 
+    echo "Checking version $ver"
+    while read page; do 
+        if [[ -e $page ]]; then
+            printf "%s already retrieved\n" "$page"
+        else
+            printf "%s needed\n" "$page"
+            curl -O "http://dev.mysql.com/doc/relnotes/mysql/$ver/en/$page"
+        fi
+    done < <(
+        curl -s "http://dev.mysql.com/doc/relnotes/mysql/$ver/en/index.html" | 
+            perl -ne 'print "$1\n" if m#(news-?-?-.*?\.html)#' | 
+            sort -t- -k4 -n | 
+            uniq
+    )
+done
