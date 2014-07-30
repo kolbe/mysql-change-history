@@ -24,42 +24,56 @@ if ((debug)); then
     echo "search: $search"
     exit
 fi
-lines=();
+matches=()
+lines=()
 while IFS='' read -r line; do 
     # printf "%s\n" "${v//<+([^>])>/}"
     # sed 's/<[^<]*>//g' <<<"$v"
     newline="$(sed 's/<[^<]*>//g' <<<"$line")"
     lines+=("$newline")
+    re='news-.-.-.*html:([0-9]+):'
+    [[ ${lines[-1]} =~ $re ]] && matches+=($((${#lines[@]}-1)))
 done < <(
     files=()
     for f in *
         do re='news-([0-9])-([0-9])-([0-9]{1,2}).*'
         [[ $f =~ $re ]] && ((BASH_REMATCH[1]==base_version[0] && BASH_REMATCH[2]==base_version[1] && BASH_REMATCH[3]>base_version[2])) && files+=("${BASH_REMATCH[0]}")
     done
+    if ! ((${#files[@]})); then
+        echo "[ERROR] no candidate source files found." >&2
+        exit 1
+    fi
     grep -C2 -ni "$search" "${files[@]}"
 ) 
+if ! ((${#lines[@]})); then
+    echo "no matching lines found." >&2
+    exit
+fi
 printlines() {
-    matches=()
+    hilight=$1
+    lesscmd=(less)
+    m=1
+    [[ $hilight ]] && lesscmd+=('+/^ *'"$hilight"') .*')
     for ((line=1; line<=${#lines[@]}; line++)); do 
         re='news-.-.-.*html(.)([0-9]+)[:-](.+$)'
         allspacere='^[[:space:]]*$'
         [[ ${lines[line-1]} =~ $re ]]
         #printf %q\\n "${BASH_REMATCH[3]}"
         if [[ ${BASH_REMATCH[1]} = ':' ]]; then
-            matches+=($((line-1)))
-            printf "%3d) %s\n" "$((${#matches[@]}))" "${lines[line-1]}"
+            printf "%3d) %s\n" "$((m++))" "${lines[line-1]}"
         elif [[ ${BASH_REMATCH[1]} = '-' && ${BASH_REMATCH[3]} && ! ${BASH_REMATCH[3]} =~ $allspacere ]]; then
             printf "     %s\n" "${lines[line-1]}"
         elif [[ ${lines[line-1]} = '--' ]]; then
             printf "\n"
         fi
-    done
+    done | LESS=-XReFj.3 "${lesscmd[@]}"
 }
 printlines
+unset previous
 while read -r -p '#? '; do 
     case $REPLY in
         q) echo "Bye!"; exit ;;
-        p) printlines ;;
+        p) printlines "$previous";;
         '') ;;
         +([0-9])) 
             if ((REPLY < 1 || REPLY > ${#matches[@]})); then printf "[ERROR] match index out of bounds, must be > 0 and <= %i\n" "${#matches[@]}" >&2; continue; fi
@@ -68,7 +82,8 @@ while read -r -p '#? '; do
             #echo "$match $line"
             re='(news-?-?-.*html):([0-9]+):'
             [[ $line =~ $re ]] && less -w +"${BASH_REMATCH[2]}"g "${BASH_REMATCH[1]}"
-            echo "#? $REPLY"
+            previous="$REPLY"
+            echo "#? $previous"
             #printlines
             ;;
         *) echo "[ERROR] provide 'p', 'q', or an integer." >&2 ;;
