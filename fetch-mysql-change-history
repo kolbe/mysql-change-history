@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
-vers=(5.0 5.1 5.5 5.6)
+vers=(5.0 5.1 5.5 5.6 5.7)
 for ver in "${vers[@]}"; do 
     echo "Checking version $ver"
     while read page; do 
         if [[ -e $page ]]; then
-            printf "%s already retrieved\n" "$page"
+            : printf "%s already retrieved\n" "$page"
         else
             printf "%s needed\n" "$page"
             curl -O "http://dev.mysql.com/doc/relnotes/mysql/$ver/en/$page"
