@@ -20,27 +20,40 @@ fi
 IFS='.' base_version=($1);
 search=$2;
 if ((debug)); then
-    echo "version: ${base_version[@]}"
+    echo "version: ${base_version[*]}"
     echo "search: $search"
     exit
 fi
 lines=();
-while IFS='' read -r line; 
-    do lines+=("$(sed 's/<[^<]*>//g' <<<"$line")")
-done < <(
-    matches=()
-    for f in *
-        do re='news-([0-9])-([0-9])-([0-9]{1,2}).*'
-        [[ $f =~ $re ]] && ((BASH_REMATCH[1]==base_version[0] && BASH_REMATCH[2]==base_version[1] && BASH_REMATCH[3]>base_version[2])) && matches+=("${BASH_REMATCH[0]}")
-    done
-    grep  -ni "$search" "${matches[@]}"
-) 
-printlines() {
-for ((line=1; line<=${#lines[@]}; line++)); do 
+while IFS='' read -r line; do 
     # printf "%s\n" "${v//<+([^>])>/}"
     # sed 's/<[^<]*>//g' <<<"$v"
-    printf "%2d) %s\n" "$((line))" "${lines[line-1]}"
-done
+    newline="$(sed 's/<[^<]*>//g' <<<"$line")"
+    lines+=("$newline")
+done < <(
+    files=()
+    for f in *
+        do re='news-([0-9])-([0-9])-([0-9]{1,2}).*'
+        [[ $f =~ $re ]] && ((BASH_REMATCH[1]==base_version[0] && BASH_REMATCH[2]==base_version[1] && BASH_REMATCH[3]>base_version[2])) && files+=("${BASH_REMATCH[0]}")
+    done
+    grep -C2 -ni "$search" "${files[@]}"
+) 
+printlines() {
+    matches=()
+    for ((line=1; line<=${#lines[@]}; line++)); do 
+        re='news-.-.-.*html(.)([0-9]+)[:-](.+$)'
+        allspacere='^[[:space:]]*$'
+        [[ ${lines[line-1]} =~ $re ]]
+        #printf %q\\n "${BASH_REMATCH[3]}"
+        if [[ ${BASH_REMATCH[1]} = ':' ]]; then
+            matches+=($((line-1)))
+            printf "%3d) %s\n" "$((${#matches[@]}))" "${lines[line-1]}"
+        elif [[ ${BASH_REMATCH[1]} = '-' && ${BASH_REMATCH[3]} && ! ${BASH_REMATCH[3]} =~ $allspacere ]]; then
+            printf "     %s\n" "${lines[line-1]}"
+        elif [[ ${lines[line-1]} = '--' ]]; then
+            printf "\n"
+        fi
+    done
 }
 printlines
 while read -r -p '#? '; do 
@@ -49,12 +62,14 @@ while read -r -p '#? '; do
         p) printlines ;;
         '') ;;
         +([0-9])) 
-            printf "%q" "$REPLY"
-            if ((REPLY < 1 || REPLY > ${#lines[@]})); then printf "[ERROR] match index out of bounds, must be > 0 and <= %i\n" "${#lines[@]}" >&2; continue; fi
-            match="${lines[REPLY-1]}"
+            if ((REPLY < 1 || REPLY > ${#matches[@]})); then printf "[ERROR] match index out of bounds, must be > 0 and <= %i\n" "${#matches[@]}" >&2; continue; fi
+            match="${matches[REPLY-1]}"
+            line="${lines[match]}"
+            #echo "$match $line"
             re='(news-?-?-.*html):([0-9]+):'
-            [[ $match =~ $re ]] && less -w +"${BASH_REMATCH[2]}"g "${BASH_REMATCH[1]}"
-            printlines
+            [[ $line =~ $re ]] && less -w +"${BASH_REMATCH[2]}"g "${BASH_REMATCH[1]}"
+            echo "#? $REPLY"
+            #printlines
             ;;
         *) echo "[ERROR] provide 'p', 'q', or an integer." >&2 ;;
     esac
