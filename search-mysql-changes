@@ -1,9 +1,36 @@
 #!/usr/bin/env bash
+#
+# Copyright 2014 (c) Kolbe Kegel
+#
+# Author: Kolbe Kegel <kolbe@kolbekegel.com>
+# 
+# This file is free software: you can redistribute it and/or modify it under 
+# the terms of the GNU General Public License as published by the 
+# Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+usage="Usage: $0 <version (ex: 5.1 or 5.5.25)> <string>"
+
+# This program expects that you have a all of the "MySQL Release Notes" .html files
+# from http://dev.mysql.com/doc/relnotes/mysql/.../ in the current working directory.
+# You can fetch those files using the included fetch-mysql-change-history script.
+
+# This program looks through the .html files *after* the <version> you specify for 
+# the <string> you specify. You can give <version> as a "release series" like 5.1 or
+# a fully-qualified "version number" like 5.1.37. If a "release series" is specified,
+# this program will search through all release notes for that release series.
 
 debug=0
 
 shopt -s extglob
-
 error=0
 
 if [[ -z $1 ]]; then
@@ -15,76 +42,125 @@ if [[ -z $2 ]]; then
     error=1
 fi
 
-((error)) && exit $error
-
+# Split provided version on dots and assign to array
 IFS='.' base_version=($1);
 search=$2;
-if ((debug)); then
-    echo "version: ${base_version[*]}"
-    echo "search: $search"
-    exit
+
+if (( ${#base_version[@]} < 2 || ${#base_version[@]} > 3 )); then
+    echo '[ERROR] <version> must be a "release series" like 5.1 or a fully-qualified version number like 5.5.25 ' >&2
+    error=1
 fi
+
+((error)) && echo "$usage" >&2 && exit $error
+
+((debug)) && printf "version: %s\nsearch: %s\n" "${base_version[*]}" "$search"
+
+# Initialize variables
 matches=()
 lines=()
+
+# Loop through relevant change history files
 while IFS='' read -r line; do 
-    # printf "%s\n" "${v//<+([^>])>/}"
-    # sed 's/<[^<]*>//g' <<<"$v"
+    # Strip all HTML tags
+    # ... it was much faster to use sed than bash parameter expansion ${.//./}
     newline="$(sed 's/<[^<]*>//g' <<<"$line")"
+
+    allspacere='^[[:space:]]*$'
+    re='news-.-.-.*html(.)([0-9]+)[:-](.+$)'
+    # Split each line into components: separator, line number, content
+    [[ $newline =~ $re ]]
+    sep=${BASH_REMATCH[1]}
+
+    # If line is '--'' (a line inserted by grep between matches), replace with empty line
+    if [[ $newline = '--' ]]; then
+        newline=''
+    #  If content of line is all spaces, just skip it
+    elif [[ ${BASH_REMATCH[3]} =~ $allspacere ]]; then
+        continue
+    fi
+
+    # Stick final, accepted line into array
     lines+=("$newline")
-    re='news-.-.-.*html:([0-9]+):'
-    [[ ${lines[-1]} =~ $re ]] && matches+=($((${#lines[@]}-1)))
+
+    # If this one has a ":" separator, it is an actual match, so note that in the parallel "matches" array
+    if [[ $sep = ':' ]]; then
+        matches+=($((${#lines[@]}-1)))
+    fi
 done < <(
     files=()
-    for f in *
+    # look through all files in PWD matching the major release given
+    for f in "news-${base_version[0]}-${base_version[1]}"*
         do re='news-([0-9])-([0-9])-([0-9]{1,2}).*'
-        [[ $f =~ $re ]] && ((BASH_REMATCH[1]==base_version[0] && BASH_REMATCH[2]==base_version[1] && BASH_REMATCH[3]>base_version[2])) && files+=("${BASH_REMATCH[0]}")
+        # if filename is greater than base version given, add to array given to grep
+        [[ $f =~ $re ]] && ((BASH_REMATCH[3]>base_version[2])) && files+=("${BASH_REMATCH[0]}")
     done
     if ! ((${#files[@]})); then
         echo "[ERROR] no candidate source files found." >&2
         exit 1
     fi
+    # grep through all candidate files
     grep -C2 -ni "$search" "${files[@]}"
 ) 
+((debug)) && { printf "%i matches: " "${#matches[@]}"; printf "<%s> " "${matches[@]}"; printf "\n"; }
 if ! ((${#lines[@]})); then
     echo "no matching lines found." >&2
     exit
 fi
+
+# print all matching & context lines 
+# arg 1 is match number to hilight in output
 printlines() {
-    hilight=$1
     lesscmd=(less)
-    m=1
-    [[ $hilight ]] && lesscmd+=('+/^ *'"$hilight"') .*')
-    for ((line=1; line<=${#lines[@]}; line++)); do 
-        re='news-.-.-.*html(.)([0-9]+)[:-](.+$)'
-        allspacere='^[[:space:]]*$'
-        [[ ${lines[line-1]} =~ $re ]]
-        #printf %q\\n "${BASH_REMATCH[3]}"
-        if [[ ${BASH_REMATCH[1]} = ':' ]]; then
-            printf "%3d) %s\n" "$((m++))" "${lines[line-1]}"
-        elif [[ ${BASH_REMATCH[1]} = '-' && ${BASH_REMATCH[3]} && ! ${BASH_REMATCH[3]} =~ $allspacere ]]; then
-            printf "     %s\n" "${lines[line-1]}"
-        elif [[ ${lines[line-1]} = '--' ]]; then
-            printf "\n"
+    # these are the less options I like. I guess folks have different preferences
+    lessvar="-XRej.3"
+    # if all lines should fit on one screen, give less the -F option so it will exit
+    (( ${#lines[@]} < $(tput lines) )) && lessvar+="F"
+    # if there is an argument, tell less to hilight the line starting with that prefix
+    [[ $1 ]] && lesscmd+=('+/^ *'"$1"') .*')
+
+    ((debug)) && printf "total lines: %i\nlessvar=%s\n" "${#lines[@]}" "$lessvar"
+    
+    m=0 # index for matches array
+    # loop through and print all lines
+    for ((line=0; line<${#lines[@]}; line++)); do 
+        # if this line is the next matching line, print it special-like
+        if (( line == matches[m] )); then
+            printf "%3d) %s\n" "$((++m))" "${lines[line]}"
+        else 
+            printf "     %s\n" "${lines[line]}"
         fi
-    done | LESS=-XReFj.3 "${lesscmd[@]}"
+    done |
+    # send the whole deal to less with our custom options for purdy pagination
+    LESS="$lessvar" "${lesscmd[@]}"
 }
+
+# main loop to print matches and prompt for user input
 printlines
 unset previous
 while read -r -p '#? '; do 
     case $REPLY in
         q) echo "Bye!"; exit ;;
         p) printlines "$previous";;
-        '') ;;
-        +([0-9])) 
+        '') ;; # just ignore empty responses
+        +([0-9])) # yay, someone picked a match, let's show the file
             if ((REPLY < 1 || REPLY > ${#matches[@]})); then printf "[ERROR] match index out of bounds, must be > 0 and <= %i\n" "${#matches[@]}" >&2; continue; fi
+
             match="${matches[REPLY-1]}"
             line="${lines[match]}"
-            #echo "$match $line"
+
+            # get filename and line number of match
             re='(news-?-?-.*html):([0-9]+):'
-            [[ $line =~ $re ]] && less -w +"${BASH_REMATCH[2]}"g "${BASH_REMATCH[1]}"
+            [[ $line =~ $re ]]
+
+            # open up less with the file that contains the match, and go to the matching line
+            # -w causes less to hilight the matching line after jumping to it
+            less -w +"${BASH_REMATCH[2]}"g "${BASH_REMATCH[1]}"
+
+            # set previous so that the next printlines call will hilight the previous match printed
             previous="$REPLY"
+
+            # print a dummy prompt with the previous match so the user can see what he looked at last
             echo "#? $previous"
-            #printlines
             ;;
         *) echo "[ERROR] provide 'p', 'q', or an integer." >&2 ;;
     esac
